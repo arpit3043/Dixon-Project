@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FTAP Temperature and Humidity Live Monitoring System</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+
+    :root{
+      --ok:#3aa653;
+      --warn:#f5a623;
+      --critical:#d43837;
+      --card-bg:#ffffff;
+      --accent:#4c88d0;
+      --map-width:360px; /* Keep map column fixed width */
+    }
+
+    body {
+      font-family: 'Roboto', Arial, sans-serif;
+      background: linear-gradient(135deg,#e5f0ff,#ffffff);
+      margin: 0;
+      color: #223348;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    /* Top Bar */
+    .top-bar{
+      max-width:1280px;
+      margin:22px auto;
+      padding:0 18px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+    .heading-tile{
+      background:var(--card-bg);
+      padding:16px 20px;
+      border-radius:12px;
+      box-shadow:0 6px 14px rgba(0,0,0,0.06);
+      font-weight:700;
+      color:#214561;
+      font-size:1.15rem;
+      flex:1 1 auto;
+    }
+    .top-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    select#floorSelector{
+      padding:8px 12px; border-radius:8px; border:2px solid var(--accent); background:#f9fcff; font-weight:600; color:#224470;
+    }
+    .btn {
+      height:40px; padding:0 12px; border-radius:8px; border:0; cursor:pointer; font-weight:700;
+      display:inline-flex; align-items:center; gap:8px;
+      box-shadow:0 4px 10px rgba(34,68,112,0.08); background:white; color:#224470;
+    }
+    .btn.primary{ background:#2b6fb2; color:white; }
+
+    /* Main grid layout */
+    .grid-wrap{
+      max-width:1280px;
+      margin: 0 auto 28px auto;
+      padding: 0 18px;
+      display: grid;
+      grid-template-columns: var(--map-width) 1fr 1fr; /* Map column fixed, other two flexible */
+      grid-template-rows: auto auto; /* Two rows */
+      gap: 18px;
+      align-items: start;
+      grid-template-areas:
+        "map       zone1     zone2"
+        "hierarchy zone3     zone4";
+    }
+
+    .zone {
+      background:var(--card-bg);
+      border-radius:12px;
+      padding:14px;
+      box-shadow:0 6px 18px rgba(30,60,100,0.06);
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+    }
+    .zone-header{ font-weight:700; color:#214561; border-bottom:3px solid var(--accent); padding-bottom:8px; }
+
+    .tile {
+      display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap;
+    }
+    .tile canvas{ width:100% !important; height:160px !important; border-radius:8px; background:#f7fbff; box-shadow:0 2px 8px rgba(70,120,180,0.06);}
+    .summary-tile{ padding:8px 10px; border-radius:10px; font-weight:700; color:white; text-align:center; width:100%; }
+
+    /* Sub-blocks inside Aging zone */
+    .subzone-block {
+      border: 1px solid #e8eef5;
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 16px;
+      background: #f9fcff;
+    }
+
+    /* Floor map column */
+    .floor-map {
+      grid-area: map; /* Assigned to 'map' area */
+      background: linear-gradient(180deg,#ffffff,#f3f8ff);
+      border-radius:12px;
+      padding:12px;
+      box-shadow:0 6px 14px rgba(0,0,0,0.06);
+      position:relative;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .map-canvas{
+      position:relative;
+      border-radius:10px;
+      background-image: linear-gradient(45deg, rgba(76,136,208,0.03) 25%, transparent 25%, transparent 75%, rgba(76,136,208,0.03) 75%), linear-gradient(45deg, rgba(76,136,208,0.03) 25%, transparent 25%, transparent 75%, rgba(76,136,208,0.03) 75%);
+      background-size: 40px 40px;
+      flex:1;
+      overflow:hidden;
+      min-height:380px; /* Keep minimum height for the map canvas itself */
+    }
+    .sensor-dot{
+      width:20px; height:20px; border-radius:50%; position:absolute; display:flex; align-items:center; justify-content:center; color:white; font-size:11px; font-weight:700;
+      box-shadow:0 6px 14px rgba(0,0,0,0.12);
+      cursor:default;
+      animation: pulse 1.4s infinite ease-in-out;
+      transform-origin:center center;
+    }
+    @keyframes pulse{
+      0% { transform: scale(1); opacity:1; box-shadow:0 6px 14px rgba(0,0,0,0.12); }
+      50% { transform: scale(1.45); opacity:0.6; box-shadow:0 10px 24px rgba(0,0,0,0.06); }
+      100% { transform: scale(1); opacity:1; }
+    }
+    .sensor-legend{ display:flex; gap:12px; flex-wrap:wrap; color:#133a5b; font-weight:600; }
+
+    /* Summary table */
+    .summary-table-wrap{ max-width:1280px; margin: 12px auto 80px auto; padding:0 18px; }
+    .summary-card{ background:var(--card-bg); border-radius:12px; padding:12px; box-shadow:0 6px 14px rgba(0,0,0,0.06); }
+    table{ width:100%; border-collapse:collapse; font-size:0.95em; }
+    thead th{ text-align:left; padding:8px 10px; border-bottom:2px solid #eef5ff; color:#224470; }
+    tbody td{ padding:8px 10px; border-bottom:1px solid #f1f6fb; color:#263844; }
+    .status-ok{ color:var(--ok); font-weight:700; }
+    .status-warn{ color:var(--warn); font-weight:700; }
+    .status-critical{ color:var(--critical); font-weight:700; }
+    .table-scroll{ max-height:220px; overflow:auto; }
+
+    /* Escalation Hierarchy Styles */
+    .escalation-hierarchy-wrap {
+      grid-area: hierarchy; /* Assigned to 'hierarchy' area */
+      background: var(--card-bg);
+      border-radius: 12px;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.06);
+      padding: 20px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    .escalation-hierarchy-wrap h2 {
+      color: #214561;
+      font-size: 1.15rem;
+      margin-top: 0;
+      margin-bottom: 20px;
+      border-bottom: 3px solid var(--accent);
+      padding-bottom: 8px;
+      text-align: center;
+      width: 100%;
+    }
+    .hierarchy-level {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 0;
+      width: 100%;
+    }
+    .hierarchy-tile {
+      background: #f9fcff;
+      border: 1px solid #e0e8f0;
+      border-radius: 8px;
+      padding: 12px 18px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+      font-weight: 600;
+      color: #224470;
+      min-width: 150px;
+      transition: all 0.2s ease-in-out;
+      cursor: pointer;
+      margin: 0 auto;
+    }
+    .hierarchy-tile:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+    }
+    .hierarchy-tile strong {
+      display: block;
+      font-size: 1.1em;
+      margin-bottom: 4px;
+      color: #214561;
+    }
+    .hierarchy-tile small {
+      display: block;
+      font-size: 0.85em;
+      color: #55697b;
+    }
+    .hierarchy-connector {
+      width: 2px;
+      height: 30px;
+      background-color: #ccc;
+      margin: 0 auto;
+    }
+
+    /* Grid area assignments */
+    #zone1 { grid-area: zone1; }
+    #zone2 { grid-area: zone2; }
+    #zone3 { grid-area: zone3; }
+    #zone4 { grid-area: zone4; }
+
+    /* small screens */
+    @media (max-width:1100px){
+      .grid-wrap{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+        grid-template-areas: none;
+      }
+      .floor-map{ grid-area: auto; min-height:260px; order:1; }
+      .escalation-hierarchy-wrap { grid-area: auto; order:2; }
+      #zone1 { order:3; }
+      #zone2 { order:4; }
+      #zone3 { order:5; }
+      #zone4 { order:6; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    <div class="heading-tile">Dixon Temperature and Humidity Live Monitoring System</div>
+
+    <div class="top-actions">
+      <select id="floorSelector" title="Select Floor">
+        <option>Dixon</option><option>FATP</option><option>Warehouse</option>
+      </select>
+
+      <!-- Export CSV adjacent to Settings -->
+      <button id="exportCsvBtn" class="btn" title="Export CSV">Export CSV</button>
+      <button id="settingsBtn" class="btn" title="Settings" aria-label="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" fill="#224470"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="grid-wrap" id="dashboard">
+
+    <!-- FLOOR MAP (left column, spans both rows) -->
+    <div class="floor-map" id="floorMap">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-weight:700; color:#214561;">Floor Map — Sensor Locations</div>
+        <div style="font-size:0.95em; color:#55697b;">Pulsing dots = sensor status</div>
+      </div>
+
+      <div class="map-canvas" id="mapCanvas">
+        <!-- BACKGROUND MAP IMAGE -->
+        <img
+          src="/mnt/data/D1.drawio.png"
+          style="width:100%; height:auto; display:block;"
+          alt="Factory Map"
+        />
+
+        <!-- AREA LABELS -->
+        <div style="position:absolute; left:72%; top:10%;
+                    font-weight:700; color:#214561; font-size:1.1rem;">
+          TRC
+        </div>
+
+        <div style="position:absolute; left:72%; top:55%;
+                    font-weight:700; color:#214561; font-size:1.1rem;">
+          MI
+        </div>
+
+        <div style="position:absolute; left:40%; top:50%;
+                    font-weight:700; color:#214561; font-size:1.1rem;">
+          FATP
+        </div>
+
+        <div style="position:absolute; left:3%; top:55%;
+                    font-weight:700; color:#214561; font-size:1.1rem;">
+          Aging 1
+        </div>
+
+        <div style="position:absolute; left:3%; top:35%;
+                    font-weight:700; color:#214561; font-size:1.1rem;">
+          Aging 2
+        </div>
+
+        <!-- DOTTED LINES -->
+        <!-- Aging 1 (S1) → FATP -->
+        <div style="position:absolute; left:18%; top:63%;
+                    width:22%; border-top:2px dotted #444;"></div>
+
+        <!-- Aging 2 (S2) → FATP -->
+        <div style="position:absolute; left:18%; top:43%;
+                    width:22%; border-top:2px dotted #444;"></div>
+
+        <!-- FATP center down to S4 -->
+        <div style="position:absolute; left:48%; top:33%;
+                    height:49%; border-left:2px dotted #444;"></div>
+
+        <!-- FATP center → TRC -->
+        <div style="position:absolute; left:48%; top:33%;
+                    width:35%; border-top:2px dotted #444;"></div>
+
+        <!-- TRC → MI vertical -->
+        <div style="position:absolute; left:83%; top:20%;
+                    height:43%; border-left:2px dotted #444;"></div>
+
+        <!-- SENSOR DOTS -->
+        <div class="sensor-dot" id="s1" title="S1"
+             style="left:14%; top:63%; background:var(--ok);">1</div>
+
+        <div class="sensor-dot" id="s2" title="S2"
+             style="left:14%; top:43%; background:var(--ok);">2</div>
+
+        <div class="sensor-dot" id="s3" title="S3"
+             style="left:48%; top:33%; background:var(--ok);">3</div>
+
+        <div class="sensor-dot" id="s4" title="S4"
+             style="left:48%; top:83%; background:var(--ok);">4</div>
+
+        <div class="sensor-dot" id="s5" title="S5"
+             style="left:83%; top:20%; background:var(--ok);">5</div>
+
+        <div class="sensor-dot" id="s6" title="S6"
+             style="left:83%; top:63%; background:var(--ok);">6</div>
+
+      </div>
+
+      <div class="sensor-legend">
+        <div>S1 — Aging 1</div>
+        <div>S2 — Aging 2</div>
+        <div>S3 — FATP</div>
+        <div>S4 — FATP</div>
+        <div>S5 — TRC</div>
+        <div>S6 — MI</div>
+      </div>
+    </div>
+
+    <!-- ZONE 1 -->
+    <div class="zone" id="zone1">
+      <div class="zone-header">MI</div>
+      <div class="tile">
+        <canvas id="tempChart1"></canvas>
+      </div>
+      <div class="tile">
+        <canvas id="humChart1"></canvas>
+      </div>
+      <div class="tile">
+        <div id="summaryTemp1" class="summary-tile" style="background:var(--ok)">Temp: OK</div>
+        <div id="summaryHum1" class="summary-tile" style="background:var(--ok)">Hum: OK</div>
+      </div>
+    </div>
+
+    <!-- ZONE 2 -->
+    <div class="zone" id="zone2">
+      <div class="zone-header">FATP</div>
+      <div class="tile"><canvas id="tempChart2"></canvas></div>
+      <div class="tile"><canvas id="humChart2"></canvas></div>
+      <div class="tile">
+        <div id="summaryTemp2" class="summary-tile" style="background:var(--ok)">Temp: OK</div>
+        <div id="summaryHum2" class="summary-tile" style="background:var(--ok)">Hum: OK</div>
+      </div>
+    </div>
+
+    <!-- Escalation Hierarchy -->
+    <div class="escalation-hierarchy-wrap">
+      <h2>Escalation Hierarchy</h2>
+
+      <div class="hierarchy-level">
+        <div class="hierarchy-tile">
+          <strong>Level 1</strong>
+          <small>Operator</small>
+        </div>
+      </div>
+      <div class="hierarchy-connector"></div>
+
+      <div class="hierarchy-level">
+        <div class="hierarchy-tile">
+          <strong>Level 2</strong>
+          <small>Supervisor</small>
+        </div>
+      </div>
+      <div class="hierarchy-connector"></div>
+
+      <div class="hierarchy-level">
+        <div class="hierarchy-tile">
+          <strong>Level 3</strong>
+          <small>Manager</small>
+        </div>
+      </div>
+      <div class="hierarchy-connector"></div>
+
+      <div class="hierarchy-level">
+        <div class="hierarchy-tile">
+          <strong>Level 4</strong>
+          <small>Department Head</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- ZONE 3 -->
+    <div class="zone" id="zone3">
+      <div class="zone-header">TRC</div>
+      <div class="tile"><canvas id="tempChart3"></canvas></div>
+      <div class="tile"><canvas id="humChart3"></canvas></div>
+      <div class="tile">
+        <div id="summaryTemp3" class="summary-tile" style="background:var(--ok)">Temp: OK</div>
+        <div id="summaryHum3" class="summary-tile" style="background:var(--ok)">Hum: OK</div>
+      </div>
+    </div>
+
+    <!-- ZONE 4 — AGING SPLIT INTO AGING 1 & AGING 2 -->
+    <div class="zone" id="zone4">
+      <div class="zone-header">Aging</div>
+
+      <!-- AGING 1 -->
+      <div class="subzone-block">
+        <h3 style="margin:0; padding:6px 0; font-size:1rem; color:#214561;">Aging 1</h3>
+
+        <!-- Graph (Temp) -->
+        <div class="tile"><canvas id="tempChart4"></canvas></div>
+
+        <!-- Temp Summary -->
+        <div class="tile">
+          <div id="summaryTemp4" class="summary-tile" style="background:var(--ok)">Temp: OK</div>
+        </div>
+      </div>
+
+      <!-- AGING 2 -->
+      <div class="subzone-block">
+        <h3 style="margin:0; padding:6px 0; font-size:1rem; color:#214561;">Aging 2</h3>
+
+        <!-- Graph (Temp) -->
+        <div class="tile"><canvas id="tempChart5"></canvas></div>
+
+        <!-- Temp Summary -->
+        <div class="tile">
+          <div id="summaryTemp5" class="summary-tile" style="background:var(--ok)">Temp: OK</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Summary table bottom -->
+  <div class="summary-table-wrap">
+    <div class="summary-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div style="font-weight:700; color:#224470;">Recent Events (last 5)</div>
+        <div style="font-size:0.95em; color:#55697b;">Latest readings by sensor</div>
+      </div>
+      <div class="table-scroll">
+        <table aria-label="Recent sensor events table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Sensor</th>
+              <th>Zone</th>
+              <th>Temp (°C)</th>
+              <th>Humidity (%)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="summaryTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dixon logo -->
+  <div style="position:fixed; right:18px; bottom:18px;">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Dixon_Technologies_Logo.svg/1200px-Dixon_Technologies_Logo.svg.png"
+         alt="DIXON" style="height:56px; border-radius:8px; background:white; padding:6px; box-shadow:0 4px 10px rgba(0,0,0,0.12)"/>
+  </div>
+
+  <script>
+    // thresholds
+    const TEMP_LCL = 22, TEMP_UCL = 32;
+    const HUM_LCL = 50, HUM_UCL = 75;
+
+    // update tick (ms) -> continuous moving graphs: update every 1 second
+    const TICK_MS = 1000;
+
+    // sensors mapping (zone assignment)
+    // zoneIdx: 0=MI, 1=FATP, 2=TRC, 3=Aging 1, 4=Aging 2
+    const SENSORS = [
+      { id: 'S1', zone: 'MI',      elId: 's1', zoneIdx: 0 },
+      { id: 'S2', zone: 'MI',      elId: 's2', zoneIdx: 0 },
+      { id: 'S3', zone: 'FATP',    elId: 's3', zoneIdx: 1 },
+      { id: 'S4', zone: 'TRC',     elId: 's4', zoneIdx: 2 },
+      { id: 'S5', zone: 'Aging 1', elId: 's5', zoneIdx: 3 },
+      { id: 'S6', zone: 'Aging 2', elId: 's6', zoneIdx: 4 }
+    ];
+
+    // data store per logical "zone" for charts (5 zones)
+    const dataStore = { temp:[[],[],[],[],[]], hum:[[],[],[],[],[]] };
+
+    // summary events (each entry contains sensor,temp,hum,status,ts)
+    const summaryEvents = [];
+    const MAX_SUMMARY_ROWS = 5;
+
+    // utility random generators
+    function randTemp(){ return +(TEMP_LCL - 2 + Math.random()*((TEMP_UCL + 2) - (TEMP_LCL - 2))).toFixed(1); }
+    function randHum(){ return +(HUM_LCL - 10 + Math.random()*((HUM_UCL + 10) - (HUM_LCL - 10))).toFixed(1); }
+
+    // determine status level from a value vs thresholds, returned severity number and label
+    function statusForMetric(value, lcl, ucl){
+      if (value < lcl - 3 || value > ucl + 3) return {label:'CRITICAL', severity:3};
+      if (value < lcl || value > ucl) return {label:'WARN', severity:2};
+      return {label:'OK', severity:1};
+    }
+
+    // combine temp+hum into overall status (highest severity dominates)
+    function combineStatus(temp, hum){
+      const t = statusForMetric(temp, TEMP_LCL, TEMP_UCL);
+      const h = statusForMetric(hum, HUM_LCL, HUM_UCL);
+      const worst = (t.severity >= h.severity) ? t : h;
+      return worst.label;
+    }
+
+    // chart factory (Chart.js)
+    function createChart(canvas, label, lcl, ucl){
+      const ctx = canvas.getContext('2d');
+      const cfg = {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            { label, data: [], borderColor:'#2b6fb2', backgroundColor:'rgba(43,111,178,0.08)', pointRadius:2, tension:0.25 },
+            { label:'LCL', data: [], borderColor:'#55aa55', borderDash:[6,4], borderWidth:1, pointRadius:0, fill:false, tension:0 },
+            { label:'UCL', data: [], borderColor:'#dd3333', borderDash:[6,4], borderWidth:1, pointRadius:0, fill:false, tension:0 }
+          ]
+        },
+        options: {
+          animation: false,
+          plugins:{ legend:{ display:false } },
+          scales:{
+            x:{ display:true, title:{display:false} },
+            y:{ min: lcl - 6, max: ucl + 6 }
+          }
+        }
+      };
+      return new Chart(ctx, cfg);
+    }
+
+    // create charts:
+    // Zones 1–3 => Temp + Hum
+    // Zones 4–5 (Aging 1 & 2) => Temp only
+    const charts = { temp:[], hum:[] };
+
+    // MI, FATP, TRC: temp + hum
+    for(let i=1;i<=3;i++){
+      charts.temp.push(createChart(document.getElementById(`tempChart${i}`), 'Temp (°C)', TEMP_LCL, TEMP_UCL));
+      charts.hum.push(createChart(document.getElementById(`humChart${i}`), 'Humidity (%)', HUM_LCL, HUM_UCL));
+    }
+
+    // Aging 1 & 2: temp-only charts
+    charts.temp.push(createChart(document.getElementById('tempChart4'), 'Temp (°C)', TEMP_LCL, TEMP_UCL));
+    charts.temp.push(createChart(document.getElementById('tempChart5'), 'Temp (°C)', TEMP_LCL, TEMP_UCL));
+
+    // helper: generate timestamp labels (human readable)
+    function makeLabels(n){
+      const now = Date.now();
+      const labels = [];
+      for(let i = n-1; i>=0; i--){
+        labels.push(new Date(now - i * TICK_MS).toLocaleTimeString());
+      }
+      return labels;
+    }
+
+    // update dataset for a chart (keep last N points)
+    function updateChart(chart, arr, lcl, ucl, maxPoints){
+      const sliced = arr.slice(-maxPoints);
+      chart.data.labels = makeLabels(sliced.length);
+      chart.data.datasets[0].data = sliced;
+      chart.data.datasets[1].data = Array(sliced.length).fill(lcl);
+      chart.data.datasets[2].data = Array(sliced.length).fill(ucl);
+      chart.update('none');
+    }
+
+    // update summary table (Temp and Humidity separate columns)
+    function renderSummaryTable(){
+      const tbody = document.getElementById('summaryTableBody');
+      tbody.innerHTML = '';
+      const rows = summaryEvents.slice(-MAX_SUMMARY_ROWS).reverse();
+      rows.forEach(ev=>{
+        const tr = document.createElement('tr');
+        const statusClass = ev.status.toLowerCase() === 'ok' ? 'status-ok' :
+                            ev.status.toLowerCase() === 'warn' ? 'status-warn' : 'status-critical';
+        tr.innerHTML = `
+          <td>${new Date(ev.ts).toLocaleTimeString()}</td>
+          <td>${ev.sensor}</td>
+          <td>${ev.zone}</td>
+          <td>${ev.temp}</td>
+          <td>${ev.hum}</td>
+          <td class="${statusClass}">${ev.status}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // set sensor dot color and pulsing intensity (scale) based on status
+    function applySensorVisual(sensorId, statusLabel){
+      const el = document.getElementById(sensorId.toLowerCase());
+      if (!el) return;
+      if (statusLabel === 'OK') {
+        el.style.background = 'var(--ok)';
+        el.style.boxShadow = '0 8px 20px rgba(58,166,83,0.22)';
+        el.style.animationDuration = '1.6s';
+      } else if (statusLabel === 'WARN') {
+        el.style.background = 'var(--warn)';
+        el.style.boxShadow = '0 8px 20px rgba(245,166,35,0.22)';
+        el.style.animationDuration = '1.2s';
+      } else {
+        el.style.background = 'var(--critical)';
+        el.style.boxShadow = '0 12px 28px rgba(212,56,55,0.28)';
+        el.style.animationDuration = '0.9s';
+      }
+    }
+
+    // seed initial history for nicer charts
+    (function seed(){
+      const seedPoints = 30; // show last 30 sec initially
+      for(let z=0; z<5; z++){
+        for(let i=0;i<seedPoints;i++){
+          dataStore.temp[z].push(randTemp());
+          dataStore.hum[z].push(randHum());
+        }
+      }
+      // render seeded charts
+      for(let z=0; z<5; z++){
+        updateChart(charts.temp[z], dataStore.temp[z], TEMP_LCL, TEMP_UCL, 60);
+        if (z < charts.hum.length) {
+          updateChart(charts.hum[z], dataStore.hum[z], HUM_LCL, HUM_UCL, 60);
+        }
+      }
+    })();
+
+    // main update tick: runs every TICK_MS (1s)
+    // If socket connected, frontend will be driven by backend events. Use local tick as fallback.
+    let socketConnected = false;
+
+    function tick(){
+      const zoneNames = ['MI', 'FATP', 'TRC', 'Aging 1', 'Aging 2'];
+      // if socket connected, ignore local synthetic tick (backend drives data)
+      if (socketConnected) return;
+
+      // for each zone produce one new value (simulate sensors assigned to zone)
+      for(let zoneIdx=0; zoneIdx<5; zoneIdx++){
+        const t = randTemp();
+        const h = randHum();
+        dataStore.temp[zoneIdx].push(t);
+        dataStore.hum[zoneIdx].push(h);
+        if (dataStore.temp[zoneIdx].length > 600) dataStore.temp[zoneIdx].shift();
+        if (dataStore.hum[zoneIdx].length > 600) dataStore.hum[zoneIdx].shift();
+
+        // update zone charts (show last 60 points)
+        updateChart(charts.temp[zoneIdx], dataStore.temp[zoneIdx], TEMP_LCL, TEMP_UCL, 60);
+        if (zoneIdx < charts.hum.length) {
+          updateChart(charts.hum[zoneIdx], dataStore.hum[zoneIdx], HUM_LCL, HUM_UCL, 60);
+        }
+
+        // update summary tiles
+        const currentZoneName = zoneNames[zoneIdx];
+        const tempSummaryEl = document.getElementById(`summaryTemp${zoneIdx+1}`);
+        const humSummaryEl  = document.getElementById(`summaryHum${zoneIdx+1}`);
+        const tStatus = statusForMetric(t, TEMP_LCL, TEMP_UCL);
+        const hStatus = statusForMetric(h, HUM_LCL, HUM_UCL);
+
+        if (tempSummaryEl) {
+          tempSummaryEl.textContent = `Temp (${currentZoneName}): ${t} °C (${tStatus.label})`;
+          tempSummaryEl.style.background = (tStatus.label==='OK') ? 'var(--ok)' :
+                                           (tStatus.label==='WARN') ? 'var(--warn)' : 'var(--critical)';
+        }
+        if (humSummaryEl) {
+          humSummaryEl.textContent  = `Hum (${currentZoneName}): ${h} % (${hStatus.label})`;
+          humSummaryEl.style.background  = (hStatus.label==='OK') ? 'var(--ok)' :
+                                           (hStatus.label==='WARN') ? 'var(--warn)' : 'var(--critical)';
+        }
+      }
+
+      // simulate each sensor reporting (SENSORS array maps sensors to zones)
+      SENSORS.forEach(s=>{
+        const zIdx = s.zoneIdx;
+        const latestTemp = dataStore.temp[zIdx].slice(-1)[0] ?? randTemp();
+        const latestHum  = dataStore.hum[zIdx].slice(-1)[0] ?? randHum();
+        const status = combineStatus(latestTemp, latestHum);
+        summaryEvents.push({ ts: Date.now(), sensor: s.id, zone: s.zone, temp: latestTemp, hum: latestHum, status });
+        if (summaryEvents.length > 200) summaryEvents.shift();
+        applySensorVisual(s.elId, status);
+      });
+
+      // render last 5 rows into table
+      renderSummaryTable();
+    }
+
+    // start ticking
+    tick();
+    setInterval(tick, TICK_MS);
+    // Export CSV: export latest N summaryEvents (or last readings per sensor)
+    document.getElementById('exportCsvBtn').addEventListener('click', ()=>{
+      const rows = summaryEvents.slice(-200);
+      let csv = 'Time,Sensor,Zone,Temp (°C),Humidity (%),Status\n';
+      rows.forEach(r=>{
+        csv += `"${new Date(r.ts).toLocaleString()}","${r.sensor}","${r.zone}",${r.temp},${r.hum},"${r.status}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sensor_readings_${Date.now()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Socket.IO client integration: connect to backend and apply incoming readings
+    try {
+      const socket = io();
+      socket.on('connect', () => { socketConnected = true; console.log('Socket.IO connected'); });
+      socket.on('disconnect', () => { socketConnected = false; console.log('Socket.IO disconnected'); });
+
+      socket.on('new_reading', (data) => {
+        try {
+          const zoneNames = ['MI', 'FATP', 'TRC', 'Aging 1', 'Aging 2'];
+          const zoneIdx = zoneNames.indexOf(data.zone);
+          if (zoneIdx === -1) return;
+
+          const t = Number(data.temperature);
+          const h = Number(data.humidity);
+
+          // push to stores
+          dataStore.temp[zoneIdx].push(t);
+          dataStore.hum[zoneIdx].push(h);
+          if (dataStore.temp[zoneIdx].length > 600) dataStore.temp[zoneIdx].shift();
+          if (dataStore.hum[zoneIdx].length > 600) dataStore.hum[zoneIdx].shift();
+
+          // update charts
+          updateChart(charts.temp[zoneIdx], dataStore.temp[zoneIdx], TEMP_LCL, TEMP_UCL, 60);
+          if (zoneIdx < charts.hum.length) {
+            updateChart(charts.hum[zoneIdx], dataStore.hum[zoneIdx], HUM_LCL, HUM_UCL, 60);
+          }
+
+          // update summary tiles
+          const tempSummaryEl = document.getElementById(`summaryTemp${zoneIdx+1}`);
+          const humSummaryEl  = document.getElementById(`summaryHum${zoneIdx+1}`);
+          if (tempSummaryEl) {
+            const tStatus = statusForMetric(t, TEMP_LCL, TEMP_UCL);
+            tempSummaryEl.textContent = `Temp (${data.zone}): ${t} °C (${tStatus.label})`;
+            tempSummaryEl.style.background = (tStatus.label==='OK') ? 'var(--ok)' : (tStatus.label==='WARN') ? 'var(--warn)' : 'var(--critical)';
+          }
+          if (humSummaryEl) {
+            const hStatus = statusForMetric(h, HUM_LCL, HUM_UCL);
+            humSummaryEl.textContent = `Hum (${data.zone}): ${h} % (${hStatus.label})`;
+            humSummaryEl.style.background = (hStatus.label==='OK') ? 'var(--ok)' : (hStatus.label==='WARN') ? 'var(--warn)' : 'var(--critical)';
+          }
+
+          // update sensor visual and summary events
+          const sid = data.sensor_id || data.sensor;
+          const sensorObj = SENSORS.find(s => s.id === sid || s.elId.toLowerCase() === (sid || '').toLowerCase());
+          if (sensorObj) applySensorVisual(sensorObj.elId, data.status || combineStatus(t,h));
+
+          summaryEvents.push({ ts: new Date(data.timestamp || Date.now()).getTime(), sensor: sid, zone: data.zone, temp: t, hum: h, status: data.status || combineStatus(t,h) });
+          if (summaryEvents.length > 200) summaryEvents.shift();
+          renderSummaryTable();
+        } catch (err) {
+          console.error('Error applying socket reading', err);
+        }
+      });
+    } catch (err) {
+      console.warn('Socket.IO client failed to initialize', err);
+    }
+
+    // Settings placeholder
+    document.getElementById('settingsBtn').addEventListener('click', ()=>{
+      alert('Settings panel under construction');
+    });
+    document.getElementById('floorSelector').addEventListener('change', (e)=>{
+      alert('Switched to floor: ' + e.target.value + '\n(In demo mode, only UI updates.)');
+    });
+
+  </script>
+</body>
+</html>
